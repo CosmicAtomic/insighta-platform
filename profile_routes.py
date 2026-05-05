@@ -6,15 +6,16 @@ import json
 from typing import Optional
 from fastapi.responses import JSONResponse
 from datetime import datetime, timezone
-from fastapi import APIRouter, Depends, status, Response
+from fastapi import APIRouter, Depends, status, Response, UploadFile, File
 from sqlalchemy.orm import Session
 from schemas import ProfileRequest
 from models import Profile
-from database import get_db, redis_client
+from database import get_db, redis_client, invalidate_query_cache
 from utils import format_full_profile, get_page_links
 from services import get_agify_data, get_genderize_data, get_nationalize_data, choose_country, classify_age, get_country_name
 from query_parser import parse_query, get_cache_key
 from auth import get_current_user, require_role, check_api_version
+from csv_ingestion import process_csv_upload
 
 profile_router = APIRouter(prefix="/api/profiles", dependencies=[Depends(check_api_version)])
 
@@ -23,11 +24,6 @@ SORT_FIELD = {
     "created_at": Profile.created_at,
     "gender_probability": Profile.gender_probability
 }
-
-def invalidate_query_cache():
-    for key in redis_client.scan_iter("profiles:query:*"):
-        redis_client.delete(key)
-
 
 @profile_router.post('')
 async def create_profile(profile_request: ProfileRequest, db: Session= Depends(get_db), current_user = Depends(require_role("admin"))):
@@ -99,7 +95,6 @@ async def create_profile(profile_request: ProfileRequest, db: Session= Depends(g
 
 @profile_router.get('')
 def get_profiles(gender: Optional[str] = None, country_id: Optional[str] = None, age_group: Optional[str] = None, min_age: Optional[int] = None, max_age: Optional[int] = None, min_gender_probability: Optional[float] = None, min_country_probability: Optional[float] = None, sort_by: Optional[str] = None, order: Optional[str] = None, page:int = 1, limit:int = 10, db: Session= Depends(get_db), current_user = Depends(get_current_user)):
-
     if sort_by is not None and sort_by.lower() not in ("age", "created_at", "gender_probability"):
         return JSONResponse(
             status_code=422,
@@ -311,6 +306,15 @@ def search(q: str, page:int = 1, limit:int = 10, db: Session= Depends(get_db), c
 
     return JSONResponse(status_code= 200, content = response_dict)
 
+@profile_router.post('/upload')
+async def upload_csv(file: UploadFile = File(...), db: Session = Depends(get_db), current_user = Depends(require_role("admin"))):
+    if not file.filename.endswith('.csv'):
+        return JSONResponse(
+            status_code=400,
+            content={"status": "error", "message": "File must be a CSV"}
+        )
+    result = await process_csv_upload(file, db)
+    return JSONResponse(content=result)
 
 @profile_router.get("/{id}")
 def get_profile(id: str, db: Session= Depends(get_db), current_user = Depends(get_current_user)):

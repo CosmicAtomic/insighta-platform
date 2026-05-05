@@ -27,3 +27,8 @@ def get_db():
         yield db
     finally:
         db.close()
+
+def invalidate_query_cache():
+    for key in redis_client.scan_iter("profiles:query:*"):
+        redis_client.delete(key)
+
