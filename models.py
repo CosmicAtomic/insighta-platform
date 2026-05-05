@@ -1,18 +1,21 @@
-from sqlalchemy import Column, Integer, String, Float,DateTime, Boolean
+from sqlalchemy import Column, Integer, String, Float, DateTime, Boolean, Index
 from database import Base
 
 class Profile(Base):
     __tablename__ = "profiles"
     id = Column(String, primary_key=True)
     name = Column(String, unique= True)
-    gender = Column(String)
-    gender_probability = Column(Float)
-    age = Column(Integer)
-    age_group = Column(String)
-    country_id = Column(String)
+    gender = Column(String, index= True)
+    gender_probability = Column(Float, index= True)
+    age = Column(Integer, index= True)
+    age_group = Column(String, index= True)
+    country_id = Column(String, index= True)
     country_name = Column(String)
-    country_probability = Column(Float)
-    created_at = Column(DateTime)
+    country_probability = Column(Float, index= True)
+    created_at = Column(DateTime, index= True)
+    __table_args__ = (
+        Index('ix_profiles_gender_country_age', 'gender', 'country_id', 'age'),
+    )
 
 class User(Base):
     __tablename__ = "users"
