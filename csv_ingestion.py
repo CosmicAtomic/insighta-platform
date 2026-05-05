@@ -105,8 +105,7 @@ async def process_csv_upload(file: UploadFile, db: Session) -> dict:
         name for (name,) in db.query(Profile.name).all()
     )
 
-    # Read the upload as a text stream — doesn't load everything into memory
-    text_stream = io.StringIO((await file.read()).decode('utf-8'))
+    text_stream = io.TextIOWrapper(file.file, encoding='utf-8')
     reader = csv.DictReader(text_stream)
 
     chunk = []
