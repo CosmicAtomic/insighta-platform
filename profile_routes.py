@@ -3,7 +3,6 @@ import uuid6
 import math
 import csv
 import json
-import hashlib
 from typing import Optional
 from fastapi.responses import JSONResponse
 from datetime import datetime, timezone
@@ -14,7 +13,7 @@ from models import Profile
 from database import get_db, redis_client
 from utils import format_full_profile, get_page_links
 from services import get_agify_data, get_genderize_data, get_nationalize_data, choose_country, classify_age, get_country_name
-from query_parser import parse_query
+from query_parser import parse_query, get_cache_key
 from auth import get_current_user, require_role, check_api_version
 
 profile_router = APIRouter(prefix="/api/profiles", dependencies=[Depends(check_api_version)])
@@ -24,12 +23,6 @@ SORT_FIELD = {
     "created_at": Profile.created_at,
     "gender_probability": Profile.gender_probability
 }
-
-def get_cache_key(params: dict) -> str:
-    """Build a deterministic cache key from query params."""
-    # Sort keys so {a:1, b:2} and {b:2, a:1} produce the same key
-    canonical = json.dumps(params, sort_keys=True)
-    return f"profiles:query:{hashlib.md5(canonical.encode()).hexdigest()}"
 
 def invalidate_query_cache():
     for key in redis_client.scan_iter("profiles:query:*"):
@@ -172,7 +165,6 @@ def get_profiles(gender: Optional[str] = None, country_id: Optional[str] = None,
 
     profiles = query.offset(skip).limit(limit)
 
-    output = [format_full_profile(profile) for profile in profiles]
     total_pages = math.ceil(total/limit)
 
     response_dict = {
@@ -182,7 +174,7 @@ def get_profiles(gender: Optional[str] = None, country_id: Optional[str] = None,
             "total": total,
             "total_pages": total_pages,
             "links": get_page_links(page, limit, total_pages),
-            "data": output,
+            "data": [format_full_profile(profile) for profile in profiles],
         }
 
     try:
@@ -271,7 +263,18 @@ def search(q: str, page:int = 1, limit:int = 10, db: Session= Depends(get_db), c
         return JSONResponse(
             status_code=400,
             content={"status": "error", "message": "Unable to interpret query"}
-        )
+        )    
+    filter["page"] = page
+    filter["limit"] = min(limit, 50)
+
+    cache_key = get_cache_key(filter)
+
+    try:
+        cached = redis_client.get(cache_key)
+        if cached:
+            return JSONResponse(content=json.loads(cached))
+    except Exception:
+        pass
     
     query = db.query(Profile)
     if filter.get("gender"):
@@ -292,20 +295,21 @@ def search(q: str, page:int = 1, limit:int = 10, db: Session= Depends(get_db), c
 
     profiles = query.offset(skip).limit(limit)
 
-    output = [format_full_profile(profile) for profile in profiles]
+    response_dict = {
+        "status": "success",
+        "page": page,
+        "limit": limit,
+        "total": total,
+        "total_pages": total_pages,
+        "links": get_page_links(page, limit, total_pages),
+        "data": [format_full_profile(profile) for profile in profiles],
+    }
+    try:
+        redis_client.setex(cache_key, 300, json.dumps(response_dict))
+    except Exception:
+        pass
 
-    return JSONResponse(
-        status_code=200,
-        content={
-            "status": "success",
-            "page": page,
-            "limit": limit,
-            "total": total,
-            "total_pages": total_pages,
-            "links": get_page_links(page, limit, total_pages),
-            "data": output,
-        }
-    )
+    return JSONResponse(status_code= 200, content = response_dict)
 
 
 @profile_router.get("/{id}")

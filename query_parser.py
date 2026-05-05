@@ -1,5 +1,7 @@
 import re
 import pycountry
+import json
+import hashlib
 
 def parse_query(query: str) -> dict:
     filters = {}
@@ -107,5 +109,66 @@ def parse_query(query: str) -> dict:
     # None signals that the query couldn't be interpreted
     return filters if filters else None
 
+def normalize_filters(filters: dict) -> dict:
+    """
+    Convert any filter dict into a canonical form so equivalent queries
+    produce the same cache key.
 
+    Rules:
+    - Remove None and empty values
+    - Lowercase string values where case doesn't matter
+    - Uppercase country codes (canonical form)
+    - Sort keys alphabetically
+    - Convert numeric strings to numbers
+    """
+    if not filters:
+        return {}
+
+    canonical = {}
+
+    # Allowed keys (whitelist to prevent garbage)
+    allowed = {
+        "gender", "country_id", "age_group",
+        "min_age", "max_age",
+        "min_gender_probability", "min_country_probability",
+        "sort_by", "order", "page", "limit"
+    }
+
+    for key, value in filters.items():
+        if key not in allowed:
+            continue
+        if value is None or value == "":
+            continue
+
+        # Normalize value formats
+        if key == "gender":
+            canonical[key] = str(value).lower().strip()
+        elif key == "country_id":
+            canonical[key] = str(value).upper().strip()
+        elif key == "age_group":
+            canonical[key] = str(value).lower().strip()
+        elif key in ("min_age", "max_age", "page", "limit"):
+            canonical[key] = int(value)
+        elif key in ("min_gender_probability", "min_country_probability"):
+            canonical[key] = float(value)
+        elif key == "order":
+            v = str(value).lower().strip()
+            if v not in ("asc", "desc"):
+                continue
+            canonical[key] = v
+        elif key == "sort_by":
+            v = str(value).lower().strip()
+            if v not in ("age", "created_at", "gender_probability"):
+                continue
+            canonical[key] = v
+        else:
+            canonical[key] = value
+
+    return canonical
+
+def get_cache_key(filters: dict) -> str:
+    """Generate a deterministic cache key from filters."""
+    normalized = normalize_filters(filters)
+    canonical = json.dumps(normalized, sort_keys=True)
+    return f"profiles:query:{hashlib.md5(canonical.encode()).hexdigest()}"
 
