@@ -21,6 +21,7 @@ Base = declarative_base()
 REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379")
 redis_client = redis.from_url(REDIS_URL, decode_responses=True)
 
+
 def get_db():
     db = SessionLocal()
     try:
@@ -28,7 +29,7 @@ def get_db():
     finally:
         db.close()
 
+
 def invalidate_query_cache():
     for key in redis_client.scan_iter("profiles:query:*"):
         redis_client.delete(key)
-

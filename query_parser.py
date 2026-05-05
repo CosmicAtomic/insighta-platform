@@ -3,6 +3,7 @@ import pycountry
 import json
 import hashlib
 
+
 def parse_query(query: str) -> dict:
     filters = {}
 
@@ -109,6 +110,7 @@ def parse_query(query: str) -> dict:
     # None signals that the query couldn't be interpreted
     return filters if filters else None
 
+
 def normalize_filters(filters: dict) -> dict:
     """
     Convert any filter dict into a canonical form so equivalent queries
@@ -166,9 +168,9 @@ def normalize_filters(filters: dict) -> dict:
 
     return canonical
 
+
 def get_cache_key(filters: dict) -> str:
     """Generate a deterministic cache key from filters."""
     normalized = normalize_filters(filters)
     canonical = json.dumps(normalized, sort_keys=True)
     return f"profiles:query:{hashlib.md5(canonical.encode()).hexdigest()}"
-

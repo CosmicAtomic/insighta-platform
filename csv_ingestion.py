@@ -11,6 +11,7 @@ from database import invalidate_query_cache
 CHUNK_SIZE = 1000
 VALID_GENDERS = {"male", "female"}
 
+
 def validate_row(row: dict, existing_names: set, chunk_names: set) -> dict:
     """
     Returns:
@@ -64,13 +65,14 @@ def validate_row(row: dict, existing_names: set, chunk_names: set) -> dict:
         }
     }
 
+
 def bulk_insert_chunk(db: Session, chunk: list) -> int:
     """Bulk insert with error handling. Returns number actually inserted."""
     try:
         db.bulk_insert_mappings(Profile, chunk)
         db.commit()
         return len(chunk)
-    except Exception as e:
+    except Exception:
         db.rollback()
         # If bulk fails, try one at a time so we save what we can
         # This shouldn't happen often if validation is solid
@@ -83,6 +85,7 @@ def bulk_insert_chunk(db: Session, chunk: list) -> int:
             except Exception:
                 db.rollback()
         return inserted
+
 
 async def process_csv_upload(file: UploadFile, db: Session) -> dict:
     counters = {
@@ -145,4 +148,3 @@ async def process_csv_upload(file: UploadFile, db: Session) -> dict:
         "status": "success",
         **counters
     }
-
