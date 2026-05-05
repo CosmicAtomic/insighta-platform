@@ -26,6 +26,7 @@ pydantic_core==2.46.1
 PyJWT==2.12.1
 python-dotenv==1.2.2
 python-jose==3.5.0
+redis==7.4.0
 requests==2.33.1
 rsa==4.9.1
 six==1.17.0

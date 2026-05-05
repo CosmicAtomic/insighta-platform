@@ -2,6 +2,8 @@ import io
 import uuid6
 import math
 import csv
+import json
+import hashlib
 from typing import Optional
 from fastapi.responses import JSONResponse
 from datetime import datetime, timezone
@@ -9,7 +11,7 @@ from fastapi import APIRouter, Depends, status, Response
 from sqlalchemy.orm import Session
 from schemas import ProfileRequest
 from models import Profile
-from database import get_db
+from database import get_db, redis_client
 from utils import format_full_profile, get_page_links
 from services import get_agify_data, get_genderize_data, get_nationalize_data, choose_country, classify_age, get_country_name
 from query_parser import parse_query
@@ -22,6 +24,17 @@ SORT_FIELD = {
     "created_at": Profile.created_at,
     "gender_probability": Profile.gender_probability
 }
+
+def get_cache_key(params: dict) -> str:
+    """Build a deterministic cache key from query params."""
+    # Sort keys so {a:1, b:2} and {b:2, a:1} produce the same key
+    canonical = json.dumps(params, sort_keys=True)
+    return f"profiles:query:{hashlib.md5(canonical.encode()).hexdigest()}"
+
+def invalidate_query_cache():
+    for key in redis_client.scan_iter("profiles:query:*"):
+        redis_client.delete(key)
+
 
 @profile_router.post('')
 async def create_profile(profile_request: ProfileRequest, db: Session= Depends(get_db), current_user = Depends(require_role("admin"))):
@@ -77,6 +90,11 @@ async def create_profile(profile_request: ProfileRequest, db: Session= Depends(g
     db.commit()     
     db.refresh(new_profile) 
 
+    try:
+        invalidate_query_cache()
+    except Exception:
+        pass
+
     return JSONResponse(
         status_code=201,
         content= {
@@ -84,6 +102,7 @@ async def create_profile(profile_request: ProfileRequest, db: Session= Depends(g
             "data": format_full_profile(new_profile)
         }
     )
+
 
 @profile_router.get('')
 def get_profiles(gender: Optional[str] = None, country_id: Optional[str] = None, age_group: Optional[str] = None, min_age: Optional[int] = None, max_age: Optional[int] = None, min_gender_probability: Optional[float] = None, min_country_probability: Optional[float] = None, sort_by: Optional[str] = None, order: Optional[str] = None, page:int = 1, limit:int = 10, db: Session= Depends(get_db), current_user = Depends(get_current_user)):
@@ -98,11 +117,36 @@ def get_profiles(gender: Optional[str] = None, country_id: Optional[str] = None,
             status_code=422,
             content={"status": "error", "message": "Invalid query parameters"}
         )
-    
     order = (order or "asc").lower()
     limit = min(limit, 50)
     skip = (page-1) * limit
-  
+
+    params = {
+        "gender": gender,
+        "country_id": country_id,
+        "age_group": age_group,
+        "min_age": min_age,
+        "max_age": max_age,
+        "min_gender_probability": min_gender_probability,
+        "min_country_probability": min_country_probability,
+        "sort_by": sort_by,
+        "order": order,
+        "page": page,
+        "limit": limit
+    }
+    # Remove None values so they don't affect the key
+    params = {k: v for k, v in params.items() if v is not None}
+
+    cache_key = get_cache_key(params)
+
+    # Try cache first
+    try:
+        cached = redis_client.get(cache_key)
+        if cached:
+            return JSONResponse(content=json.loads(cached))
+    except Exception:
+        pass
+    
     query = db.query(Profile)
     if gender:
         query = query.filter(Profile.gender == gender.lower())
@@ -131,9 +175,7 @@ def get_profiles(gender: Optional[str] = None, country_id: Optional[str] = None,
     output = [format_full_profile(profile) for profile in profiles]
     total_pages = math.ceil(total/limit)
 
-    return JSONResponse(
-        status_code=200,
-        content={
+    response_dict = {
             "status": "success",
             "page": page,
             "limit": limit,
@@ -142,7 +184,13 @@ def get_profiles(gender: Optional[str] = None, country_id: Optional[str] = None,
             "links": get_page_links(page, limit, total_pages),
             "data": output,
         }
-    )
+
+    try:
+        redis_client.setex(cache_key, 300, json.dumps(response_dict))# 5 min TTL
+    except Exception:
+        pass  
+    return JSONResponse(status_code=200, content=response_dict)
+
 
 @profile_router.get('/export')
 def export_profiles_csv(gender: Optional[str] = None, country_id: Optional[str] = None, age_group: Optional[str] = None, min_age: Optional[int] = None, max_age: Optional[int] = None, min_gender_probability: Optional[float] = None, min_country_probability: Optional[float] = None, sort_by: Optional[str] = None, order: Optional[str] = None, db: Session= Depends(get_db), current_user = Depends(get_current_user)):
@@ -209,6 +257,7 @@ def export_profiles_csv(gender: Optional[str] = None, country_id: Optional[str] 
         }
     ) 
 
+
 @profile_router.get('/search')
 def search(q: str, page:int = 1, limit:int = 10, db: Session= Depends(get_db), current_user = Depends(get_current_user)):
     if not q:
@@ -258,6 +307,7 @@ def search(q: str, page:int = 1, limit:int = 10, db: Session= Depends(get_db), c
         }
     )
 
+
 @profile_router.get("/{id}")
 def get_profile(id: str, db: Session= Depends(get_db), current_user = Depends(get_current_user)):
     profile = db.query(Profile).filter(Profile.id == id).first()
@@ -276,6 +326,7 @@ def get_profile(id: str, db: Session= Depends(get_db), current_user = Depends(ge
         }
     )
 
+
 @profile_router.delete("/{id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_profile(id: str, db: Session = Depends(get_db), current_user = Depends(require_role("admin"))):
     profile = db.query(Profile).filter(Profile.id == id).first()
@@ -286,5 +337,9 @@ def delete_profile(id: str, db: Session = Depends(get_db), current_user = Depend
         )
     db.delete(profile)
     db.commit()
+    try:
+        invalidate_query_cache()
+    except Exception:
+        pass
 
     return Response(status_code=status.HTTP_204_NO_CONTENT)
