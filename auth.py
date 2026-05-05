@@ -1,7 +1,6 @@
 import os
 import jwt
 from datetime import datetime, timezone, timedelta
-from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 from fastapi import Request, HTTPException, Depends
 from database import get_db
@@ -11,6 +10,7 @@ load_dotenv()
 
 JWT_SECRET_KEY = os.environ.get("JWT_SECRET_KEY")
 
+
 def create_token(data, exp_mins):
     payload = {**data}
     payload["exp"] = datetime.now(tz=timezone.utc) + timedelta(minutes=exp_mins)
@@ -18,13 +18,16 @@ def create_token(data, exp_mins):
     token = jwt.encode(payload=payload, key=JWT_SECRET_KEY, algorithm="HS256")
     return token
 
+
 def create_access_token(user_id, role):
     data = {"user_id": user_id, "role": role}
     return create_token(data, 3)
 
+
 def create_refresh_token(user_id):
     data = {"user_id": user_id}
     return create_token(data, 5)
+
 
 def verify_token(token):
     try:
@@ -34,6 +37,7 @@ def verify_token(token):
         return None
     except jwt.InvalidTokenError:
         return None
+
 
 def get_current_user(request: Request, db: Session = Depends(get_db)):
     auth_header = request.headers.get("Authorization")
@@ -48,12 +52,14 @@ def get_current_user(request: Request, db: Session = Depends(get_db)):
         raise HTTPException(status_code=403, detail={"status": "error", "message": "Access denied"})
     return user
 
+
 def require_role(role: str):
     def role_checker(current_user=Depends(get_current_user)):
         if current_user.role != role:
             raise HTTPException(status_code=403, detail={"status": "error", "message": "Insufficient permissions"})
         return current_user
     return role_checker
+
 
 def check_api_version(request: Request):
     header = request.headers.get("X-API-Version")

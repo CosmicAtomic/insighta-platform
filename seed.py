@@ -1,4 +1,4 @@
-from database import Base, SessionLocal, engine
+from database import SessionLocal
 from models import Profile
 import json
 import uuid6
@@ -28,9 +28,3 @@ for profile in data["profiles"]:
 
 db.commit()
 db.close()
-
-
-
-
-
-

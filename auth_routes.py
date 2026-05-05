@@ -1,9 +1,11 @@
 import os
 import requests
 import uuid6
-import secrets, base64, hashlib
+import secrets
+import base64
+import hashlib
 from datetime import datetime, timezone, timedelta
-from fastapi import APIRouter, HTTPException, Depends, Request
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import RedirectResponse, JSONResponse
 from sqlalchemy.orm import Session
 from database import get_db
@@ -22,6 +24,7 @@ CALL_BACK_URL = os.environ.get("CALLBACK_URL", "http://localhost:8000/auth/githu
 
 auth_router = APIRouter(prefix='/auth')
 users_router = APIRouter(prefix='/api')
+
 
 @auth_router.options('/github')
 async def auth_github_options():
@@ -142,7 +145,10 @@ async def github_callback(request: Request, code: str = None, state: str = None,
             "analyst_user": {"id": analyst.id, "username": analyst.username, "role": analyst.role},
             "users": {
                 "admin": {"id": admin.id, "username": admin.username, "role": admin.role, "token": admin_access},
-                "analyst": {"id": analyst.id, "username": analyst.username, "role": analyst.role, "token": analyst_access}
+                "analyst": {
+                    "id": analyst.id, "username": analyst.username,
+                    "role": analyst.role, "token": analyst_access
+                }
             }
         })
 
@@ -234,7 +240,7 @@ async def auth_refresh(request: Request, request_body: RefreshRequest = None, db
 
     stored_token = db.query(Refresh_Token).filter(
         Refresh_Token.token == request_body.refresh_token,
-        Refresh_Token.is_used == False
+        Refresh_Token.is_used is False
     ).first()
     if not stored_token:
         return JSONResponse(status_code=401, content={"status": "error", "message": "Token is expired or invalid"})

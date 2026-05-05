@@ -1,6 +1,6 @@
 import time
 import logging
-from fastapi import FastAPI, Depends, Request, HTTPException
+from fastapi import FastAPI, Request, HTTPException
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -18,6 +18,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 app = FastAPI()
+
 
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
@@ -39,6 +40,7 @@ Base.metadata.create_all(bind=engine)
 
 app.state.limiter = limiter
 
+
 async def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded):
     return JSONResponse(
         status_code=429,
@@ -52,6 +54,7 @@ app.include_router(profile_router)
 app.include_router(auth_router)
 app.include_router(users_router)
 
+
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
     if isinstance(exc.detail, dict):
@@ -60,6 +63,7 @@ async def http_exception_handler(request: Request, exc: HTTPException):
         status_code=exc.status_code,
         content={"status": "error", "message": str(exc.detail)}
     )
+
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
