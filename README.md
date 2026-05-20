@@ -1,4 +1,4 @@
-# Name Profiler API
+# Insighta Platform API
 
 A REST API that accepts a name and returns a rich demographic profile by aggregating data from three public APIs — gender prediction, age estimation, and nationality inference. Profiles are persisted in a PostgreSQL database and exposed through a set of authenticated endpoints that support filtering, sorting, pagination, natural language search, and CSV export.
 
@@ -6,7 +6,7 @@ A REST API that accepts a name and returns a rich demographic profile by aggrega
 
 ## Live URL
 
-> `https://name-profiler-production.up.railway.app/`
+> `https://insighta-gfrf.onrender.com/`
 
 ---
 
@@ -15,6 +15,7 @@ A REST API that accepts a name and returns a rich demographic profile by aggrega
 - **Python** + **FastAPI**
 - **SQLAlchemy** (ORM)
 - **PostgreSQL** (production) / SQLite (local fallback)
+- **Redis** (query result caching)
 - **Pydantic** (request validation)
 - **httpx** (async HTTP client)
 - **PyJWT** (token encoding and verification)
@@ -29,15 +30,16 @@ The application is split into focused modules, each with a single responsibility
 
 ```
 main.py              — App entry point: registers routers, middleware, and exception handlers
-database.py          — SQLAlchemy engine, session factory, and get_db dependency
+database.py          — SQLAlchemy engine, session factory, Redis client, and get_db dependency
 models.py            — ORM table definitions (Profile, User, Refresh_Token)
 schemas.py           — Pydantic request/response models
 services.py          — External API calls (Genderize, Agify, Nationalize) and helper functions
 utils.py             — Response formatters and pagination link builder
-query_parser.py      — Rule-based natural language query parser
+query_parser.py      — Rule-based natural language query parser + cache key normalization
 auth.py              — JWT utilities, get_current_user dependency, require_role guard
 profile_routes.py    — All /api/profiles endpoints
 auth_routes.py       — All /auth endpoints (OAuth, token refresh, logout, /me)
+csv_ingestion.py     — Streaming CSV bulk upload with chunked inserts and row validation
 seed.py              — Database seeding script
 ```
 
@@ -63,6 +65,7 @@ POST /api/profiles
     → age classified into group (child / teenager / adult / senior)
     → country code resolved to full name via pycountry
     → Profile saved to DB with UUID v7
+    → Redis query cache invalidated
 ```
 
 ---
@@ -82,8 +85,8 @@ POST /api/profiles
 ### 1. Clone the repository
 
 ```bash
-git clone https://github.com/CosmicAtomic/name-profiler.git
-cd name-profiler
+git clone https://github.com/CosmicAtomic/insighta_platform.git
+cd insighta_platform
 ```
 
 ### 2. Create and activate a virtual environment
@@ -105,13 +108,16 @@ pip install -r requirements.txt
 Copy `.env.example` to `.env` and fill in your values:
 
 ```env
-DATABASE_URL=postgresql://username:password@localhost:5432/name_profiler
+DATABASE_URL=postgresql://username:password@localhost:5432/insighta
+REDIS_URL=redis://localhost:6379
 GITHUB_CLIENT_ID=your_github_oauth_app_client_id
 GITHUB_CLIENT_SECRET=your_github_oauth_app_client_secret
+CALLBACK_URL=http://localhost:8000/auth/github/callback
 JWT_SECRET_KEY=some_long_random_string
 ```
 
-If `DATABASE_URL` is not set, the app falls back to a local SQLite database (`sql_app.db`).
+If `DATABASE_URL` is not set, the app falls back to a local SQLite database (`sql_app.db`).  
+If `REDIS_URL` is not set, it defaults to `redis://localhost:6379`. Caching will silently fail if Redis is unavailable — the API still works, just without caching.
 
 ### 5. Start the server
 
@@ -123,66 +129,13 @@ The API will be available at `http://localhost:8000`.
 
 ---
 
-## CLI Usage
-
-All protected endpoints require two headers on every request:
-
-```
-X-API-Version: 1
-Authorization: Bearer <access_token>
-```
-
-**Authenticate and get tokens:**
-```bash
-# Visit in browser — redirects to GitHub
-GET /auth/github
-```
-
-**Use the access token:**
-```bash
-curl -H "X-API-Version: 1" \
-     -H "Authorization: Bearer <access_token>" \
-     https://name-profiler-production.up.railway.app/api/profiles
-```
-
-**Refresh an expired access token:**
-```bash
-curl -X POST https://name-profiler-production.up.railway.app/auth/refresh \
-     -H "Content-Type: application/json" \
-     -d '{"refresh_token": "<refresh_token>"}'
-```
-
-**Logout:**
-```bash
-curl -X POST https://name-profiler-production.up.railway.app/auth/logout \
-     -H "Content-Type: application/json" \
-     -d '{"refresh_token": "<refresh_token>"}'
-```
-
-**Get current user info:**
-```bash
-curl -H "X-API-Version: 1" \
-     -H "Authorization: Bearer <access_token>" \
-     https://name-profiler-production.up.railway.app/auth/me
-```
-
-**Export profiles as CSV:**
-```bash
-curl -H "X-API-Version: 1" \
-     -H "Authorization: Bearer <access_token>" \
-     "https://name-profiler-production.up.railway.app/api/profiles/export?gender=female&age_group=adult" \
-     -o profiles.csv
-```
-
----
-
 ## Seeding the Database
 
 ```bash
 DATABASE_URL=your_database_url python seed.py
 ```
 
-The script loads 2026 profiles from `seed_profiles.json`. It checks existing names before inserting, so it is safe to run multiple times.
+The script loads profiles from `seed_profiles.json`. It checks existing names before inserting, so it is safe to run multiple times.
 
 ---
 
@@ -191,7 +144,7 @@ The script loads 2026 profiles from `seed_profiles.json`. It checks existing nam
 Authentication is handled via GitHub OAuth. No passwords are stored.
 
 ```
-1. Client visits GET /auth/github
+1. Client visits GET /auth/github  (or GET /auth/github?redirect_to=<frontend_url>)
       → Server generates a random state token and PKCE code verifier
       → Both are stored in memory keyed by state
       → Client is redirected to GitHub's authorization page
@@ -214,22 +167,13 @@ Authentication is handled via GitHub OAuth. No passwords are stored.
 **Redirect flow** (for frontend clients):
 
 ```
-GET /auth/github?redirect_to=http://yourfrontend.com/callback
+GET /auth/github?redirect_to=https://insighta-lab.netlify.app/dashboard.html
 ```
 
 After login, the server redirects to:
 ```
-http://yourfrontend.com/callback?access_token=...&refresh_token=...&username=...
+https://insighta-lab.netlify.app/dashboard.html?access_token=...&refresh_token=...&username=...
 ```
-
----
-
-## Related Repositories
-
-- **CLI Tool:** [insighta-cli](https://github.com/CosmicAtomic/insighta-cli) — Terminal interface for all API operations
-- **Web Portal:** [insighta-web](https://github.com/CosmicAtomic/insighta-web) — Browser-based dashboard at https://insighta-lab.netlify.app/
-
-Both clients authenticate through this backend via GitHub OAuth and consume the same API endpoints.
 
 ---
 
@@ -272,24 +216,19 @@ Every user is assigned one of two roles at account creation:
 | Role | Assigned | Permissions |
 |------|----------|-------------|
 | `analyst` | Default for all new GitHub logins | Read-only access — can list, search, filter, export, and view profiles |
-| `admin` | Manually assigned in the database | Full access — all analyst permissions plus create and delete profiles |
+| `admin` | Manually assigned in the database | Full access — all analyst permissions plus create, upload, and delete profiles |
 
-**How it works in code:**
-
-All `/api/profiles` routes require the `X-API-Version: 1` header and a valid JWT (`check_api_version` runs as a router-level dependency before any route handler).
-
-Individual routes then layer their own auth:
+All `/api/profiles` routes require the `X-API-Version: 1` header and a valid JWT.
 
 ```
-GET  /api/profiles          → get_current_user  (analyst or admin)
-GET  /api/profiles/export   → get_current_user  (analyst or admin)
-GET  /api/profiles/search   → get_current_user  (analyst or admin)
-GET  /api/profiles/{id}     → get_current_user  (analyst or admin)
-POST /api/profiles          → require_role("admin")
-DELETE /api/profiles/{id}   → require_role("admin")
+GET  /api/profiles          → any authenticated user
+GET  /api/profiles/export   → any authenticated user
+GET  /api/profiles/search   → any authenticated user
+GET  /api/profiles/{id}     → any authenticated user
+POST /api/profiles          → admin only
+POST /api/profiles/upload   → admin only
+DELETE /api/profiles/{id}   → admin only
 ```
-
-`get_current_user` extracts the Bearer token, verifies it, fetches the user from the database, and confirms `is_active = True`. `require_role` wraps `get_current_user` and additionally checks that `user.role` matches the required role — returning 403 if it does not.
 
 ---
 
@@ -304,6 +243,7 @@ DELETE /api/profiles/{id}   → require_role("admin")
 | `POST` | `/auth/refresh` | None | Exchange refresh token for new tokens |
 | `POST` | `/auth/logout` | None | Invalidate a refresh token |
 | `GET` | `/auth/me` | Bearer token | Get current user info |
+| `GET` | `/api/users/me` | Bearer token | Alias for /auth/me |
 
 ### Profiles
 
@@ -315,6 +255,7 @@ DELETE /api/profiles/{id}   → require_role("admin")
 | `GET` | `/api/profiles/search` | Any user | Natural language search |
 | `GET` | `/api/profiles/{id}` | Any user | Get a single profile by ID |
 | `DELETE` | `/api/profiles/{id}` | Admin | Delete a profile |
+| `POST` | `/api/profiles/upload` | Admin | Bulk upload profiles from CSV |
 
 All profile endpoints require the `X-API-Version: 1` header.
 
@@ -349,7 +290,20 @@ All profile endpoints require the `X-API-Version: 1` header.
     "next": "/api/profiles?page=2&limit=10",
     "prev": null
   },
-  "data": [ "...profiles..." ]
+  "data": [
+    {
+      "id": "01906b2a-...",
+      "name": "James",
+      "gender": "male",
+      "gender_probability": 0.98,
+      "age": 34,
+      "age_group": "adult",
+      "country_id": "US",
+      "country_name": "United States",
+      "country_probability": 0.12,
+      "created_at": "2025-05-20T10:00:00Z"
+    }
+  ]
 }
 ```
 
@@ -366,61 +320,34 @@ All profile endpoints require the `X-API-Version: 1` header.
 
 ---
 
-## Natural Language Search — Parsing Approach
+## Natural Language Search
 
-The `/api/profiles/search` endpoint uses a **rule-based keyword scanner** — no AI or LLM involved. The query is inspected for known keywords and patterns, which map to structured database filters.
+The `/api/profiles/search?q=<query>` endpoint uses a **rule-based keyword scanner** — no AI or LLM involved.
 
-### Order of Operations
+**Examples:**
+```
+?q=adult males from Nigeria
+?q=women older than 30
+?q=young females
+?q=senior men from Japan
+```
 
-1. Lowercase the entire query
-2. Split into words for word-level matching
-3. Detect gender keywords
-4. Detect age group keywords
-5. Handle `young` (maps to age range, not age group)
-6. Detect age comparison phrases against the full query string
-7. Detect country via the word `from`
-8. Return filters dict — if empty, return `None` → 400 error
+**Supported keywords:**
 
-### Supported Keywords
+| Type | Keywords | Filter applied |
+|------|----------|----------------|
+| Gender | `male`, `males`, `men`, `man` | `gender = "male"` |
+| Gender | `female`, `females`, `women`, `woman` | `gender = "female"` |
+| Age group | `child`, `children` | `age_group = "child"` |
+| Age group | `teen`, `teens`, `teenager`, `teenagers` | `age_group = "teenager"` |
+| Age group | `adult`, `adults` | `age_group = "adult"` |
+| Age group | `senior`, `seniors`, `elderly`, `old` | `age_group = "senior"` |
+| Age range | `young` (no other age group) | `min_age=16, max_age=24` |
+| Min age | `older than N`, `above N`, `over N` | `min_age = N` |
+| Max age | `younger than N`, `below N`, `under N` | `max_age = N` |
+| Country | `from <country>` | `country_id = <ISO code>` |
 
-**Gender:**
-
-| Keyword | Maps to |
-|---------|---------|
-| `male`, `males`, `men`, `man` | `gender = "male"` |
-| `female`, `females`, `women`, `woman` | `gender = "female"` |
-
-If both genders appear in the same query, the gender filter is skipped. The female check runs before male because "female" contains "male".
-
-**Age groups:**
-
-| Keyword | Maps to |
-|---------|---------|
-| `child`, `children` | `age_group = "child"` |
-| `teen`, `teens`, `teenager`, `teenagers` | `age_group = "teenager"` |
-| `adult`, `adults` | `age_group = "adult"` |
-| `senior`, `seniors`, `elderly`, `old` | `age_group = "senior"` |
-
-**"young":** Maps to `min_age = 16, max_age = 24`. Only applied if no other age group keyword matched — "young adults" resolves to `adult`.
-
-**Age comparisons:**
-
-| Pattern | Maps to |
-|---------|---------|
-| `older than N`, `above N`, `over N` | `min_age = N` |
-| `younger than N`, `below N`, `under N` | `max_age = N` |
-
-**Country:** Looks for `from` in the query and resolves the next word using pycountry fuzzy search to a 2-letter country code.
-
-### Limitations
-
-- **No typo correction** for gender/age keywords — "femal" or "adut" won't match
-- **No negation** — "not from Nigeria" won't work
-- **Multi-word country names fail** — "from United States" only reads "United", not "United States"
-- **No number ranges** — "between 20 and 30" is not supported; use `min_age` + `max_age` query params instead
-- **One country at a time** — "from Nigeria or Ghana" ignores Ghana
-- **Conflicting filters** — "children older than 50" applies both `age_group = child` and `min_age = 50` simultaneously, which produces no results
-- **Unrecognized queries return 400** — if no keyword is matched at all, the endpoint returns an error rather than returning all profiles
+Returns the same response envelope as `GET /api/profiles`.
 
 ---
 
@@ -437,4 +364,338 @@ If both genders appear in the same query, the gender filter is skipped. The fema
 | `403` | Authenticated but insufficient role, or inactive account |
 | `404` | Profile not found |
 | `422` | Invalid query parameter type or value |
+| `429` | Rate limit exceeded — retry after 60 seconds |
 | `502` | External API (Genderize/Agify/Nationalize) returned unusable data |
+
+---
+
+## Frontend Integration Guide
+
+This section is for the frontend developer building on top of this API.
+
+### Base URL
+
+```
+https://insighta-gfrf.onrender.com
+```
+
+Store this as a constant — never hardcode it across multiple files.
+
+```js
+const API_BASE = "https://insighta-gfrf.onrender.com";
+```
+
+---
+
+### Step 1 — GitHub OAuth Login
+
+There are no username/password credentials. Login is handled entirely through GitHub OAuth.
+
+**Trigger login** by redirecting the user to:
+
+```
+https://insighta-gfrf.onrender.com/auth/github?redirect_to=https://insighta-lab.netlify.app/dashboard.html
+```
+
+After the user approves the OAuth prompt on GitHub, the backend redirects them back to:
+
+```
+https://insighta-lab.netlify.app/dashboard.html?access_token=<token>&refresh_token=<token>&username=<username>
+```
+
+**On your dashboard page, read the tokens from the URL:**
+
+```js
+const params = new URLSearchParams(window.location.search);
+const accessToken = params.get("access_token");
+const refreshToken = params.get("refresh_token");
+const username = params.get("username");
+
+// Store them — see token storage section below
+localStorage.setItem("access_token", accessToken);
+localStorage.setItem("refresh_token", refreshToken);
+
+// Clean the tokens from the URL bar
+window.history.replaceState({}, document.title, window.location.pathname);
+```
+
+---
+
+### Step 2 — Required Headers
+
+Every call to a `/api/profiles` endpoint requires **two headers**:
+
+```
+X-API-Version: 1
+Authorization: Bearer <access_token>
+```
+
+Build a reusable fetch helper so you don't repeat this:
+
+```js
+function apiRequest(path, options = {}) {
+  const token = localStorage.getItem("access_token");
+  return fetch(`${API_BASE}${path}`, {
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      "X-API-Version": "1",
+      "Authorization": `Bearer ${token}`,
+      ...(options.headers || {})
+    }
+  });
+}
+```
+
+Auth endpoints (`/auth/refresh`, `/auth/logout`, `/auth/me`) do **not** require `X-API-Version`.
+
+---
+
+### Step 3 — Token Storage
+
+| Method | Recommendation |
+|--------|----------------|
+| `localStorage` | Simple, works fine for this project. Tokens expire in 3–5 min so the exposure window is small. |
+| `sessionStorage` | Slightly safer — tokens are cleared when the tab closes. |
+| Cookie (httpOnly) | Safest against XSS but requires server-side changes. Not currently supported. |
+
+Since tokens expire in 3 minutes, don't overthink this — `localStorage` is fine.
+
+---
+
+### Step 4 — Token Refresh Strategy
+
+Access tokens expire after **3 minutes**. When a request returns `401`, refresh the token and retry.
+
+```js
+async function apiRequestWithRefresh(path, options = {}) {
+  let response = await apiRequest(path, options);
+
+  if (response.status === 401) {
+    const refreshed = await refreshAccessToken();
+    if (!refreshed) {
+      // Refresh also failed — send user back to login
+      redirectToLogin();
+      return null;
+    }
+    response = await apiRequest(path, options); // retry once
+  }
+
+  return response;
+}
+
+async function refreshAccessToken() {
+  const refreshToken = localStorage.getItem("refresh_token");
+  if (!refreshToken) return false;
+
+  const res = await fetch(`${API_BASE}/auth/refresh`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ refresh_token: refreshToken })
+  });
+
+  if (!res.ok) {
+    localStorage.removeItem("access_token");
+    localStorage.removeItem("refresh_token");
+    return false;
+  }
+
+  const data = await res.json();
+  localStorage.setItem("access_token", data.access_token);
+  localStorage.setItem("refresh_token", data.refresh_token);
+  return true;
+}
+
+function redirectToLogin() {
+  window.location.href =
+    `${API_BASE}/auth/github?redirect_to=https://insighta-lab.netlify.app/dashboard.html`;
+}
+```
+
+> **Note:** Refresh tokens also expire after 5 minutes and are single-use. Each `/auth/refresh` call returns a brand-new pair of tokens — always replace both.
+
+---
+
+### Step 5 — Logout
+
+```js
+async function logout() {
+  const refreshToken = localStorage.getItem("refresh_token");
+  await fetch(`${API_BASE}/auth/logout`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ refresh_token: refreshToken })
+  });
+  localStorage.removeItem("access_token");
+  localStorage.removeItem("refresh_token");
+  window.location.href = "/";
+}
+```
+
+---
+
+### Step 6 — Get Current User
+
+```js
+const res = await apiRequest("/auth/me");
+const { data } = await res.json();
+// data.id, data.username, data.email, data.role, data.avatar_url
+```
+
+Response:
+```json
+{
+  "status": "success",
+  "data": {
+    "id": "01906b2a-...",
+    "github_id": "12345678",
+    "username": "johndoe",
+    "email": "john@example.com",
+    "role": "analyst",
+    "avatar_url": "https://avatars.githubusercontent.com/...",
+    "is_active": true,
+    "last_login_at": "2025-05-20T10:00:00Z",
+    "created_at": "2025-05-01T08:00:00Z"
+  }
+}
+```
+
+Use `data.role` to conditionally show/hide admin controls in the UI.
+
+---
+
+### API Usage Examples (JavaScript)
+
+**List profiles with filters:**
+```js
+const res = await apiRequestWithRefresh(
+  "/api/profiles?gender=female&age_group=adult&page=1&limit=20"
+);
+const data = await res.json();
+// data.data → array of profiles
+// data.total, data.total_pages, data.links.next, data.links.prev
+```
+
+**Get a single profile:**
+```js
+const res = await apiRequestWithRefresh(`/api/profiles/${id}`);
+const { data } = await res.json();
+```
+
+**Natural language search:**
+```js
+const query = encodeURIComponent("adult females from Nigeria");
+const res = await apiRequestWithRefresh(`/api/profiles/search?q=${query}`);
+const data = await res.json();
+```
+
+**Export as CSV (triggers file download):**
+```js
+const res = await apiRequestWithRefresh("/api/profiles/export?gender=male");
+const blob = await res.blob();
+const url = URL.createObjectURL(blob);
+const a = document.createElement("a");
+a.href = url;
+a.download = "profiles.csv";
+a.click();
+```
+
+**Create a profile (admin only):**
+```js
+const res = await apiRequestWithRefresh("/api/profiles", {
+  method: "POST",
+  body: JSON.stringify({ name: "Amara" })
+});
+```
+
+**Delete a profile (admin only):**
+```js
+const res = await apiRequestWithRefresh(`/api/profiles/${id}`, {
+  method: "DELETE"
+});
+// 204 No Content on success
+```
+
+---
+
+### CORS
+
+The API accepts requests from any origin (`*`). No special CORS setup is needed on the frontend. Requests with credentials (cookies) are not supported — use the `Authorization` header instead.
+
+---
+
+### Rate Limits
+
+| Endpoint | Limit |
+|----------|-------|
+| `GET /auth/github` | 10 requests/minute |
+| All other `/auth/*` endpoints | 30 requests/minute |
+
+When rate limited, the API returns `429` with header `Retry-After: 60`. Wait 60 seconds before retrying.
+
+---
+
+### GitHub OAuth App Setup (if running locally)
+
+To run the full auth flow locally, you need your own GitHub OAuth App:
+
+1. Go to GitHub → Settings → Developer Settings → OAuth Apps → New OAuth App
+2. Set **Homepage URL** to `http://localhost:8000`
+3. Set **Authorization callback URL** to `http://localhost:8000/auth/github/callback`
+4. Copy the **Client ID** and **Client Secret** into your `.env`
+
+For local frontend development, change the `redirect_to` to your local frontend URL (e.g. `http://localhost:3000/dashboard.html`).
+
+---
+
+## Related Repositories
+
+- **CLI Tool:** [insighta-cli](https://github.com/CosmicAtomic/insighta-cli) — Terminal interface for all API operations
+- **Web Portal:** [insighta-web](https://github.com/CosmicAtomic/insighta-web) — Browser-based dashboard at https://insighta-lab.netlify.app/
+
+Both clients authenticate through this backend via GitHub OAuth and consume the same API endpoints.
+
+---
+
+## CLI Usage
+
+All protected endpoints require two headers on every request:
+
+```
+X-API-Version: 1
+Authorization: Bearer <access_token>
+```
+
+**Get tokens (test mode):**
+```bash
+curl https://insighta-gfrf.onrender.com/auth/github/callback?code=test_code
+```
+
+**List profiles:**
+```bash
+curl -H "X-API-Version: 1" \
+     -H "Authorization: Bearer <access_token>" \
+     https://insighta-gfrf.onrender.com/api/profiles
+```
+
+**Refresh an expired access token:**
+```bash
+curl -X POST https://insighta-gfrf.onrender.com/auth/refresh \
+     -H "Content-Type: application/json" \
+     -d '{"refresh_token": "<refresh_token>"}'
+```
+
+**Logout:**
+```bash
+curl -X POST https://insighta-gfrf.onrender.com/auth/logout \
+     -H "Content-Type: application/json" \
+     -d '{"refresh_token": "<refresh_token>"}'
+```
+
+**Export profiles as CSV:**
+```bash
+curl -H "X-API-Version: 1" \
+     -H "Authorization: Bearer <access_token>" \
+     "https://insighta-gfrf.onrender.com/api/profiles/export?gender=female&age_group=adult" \
+     -o profiles.csv
+```
