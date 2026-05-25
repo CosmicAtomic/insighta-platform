@@ -21,12 +21,12 @@ def create_token(data, exp_mins):
 
 def create_access_token(user_id, role):
     data = {"user_id": user_id, "role": role}
-    return create_token(data, 3)
+    return create_token(data, 15)
 
 
 def create_refresh_token(user_id):
     data = {"user_id": user_id}
-    return create_token(data, 5)
+    return create_token(data, 20)
 
 
 def verify_token(token):

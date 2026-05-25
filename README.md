@@ -184,14 +184,14 @@ The API uses two JWTs per session — a short-lived access token and a longer-li
 **Access token:**
 - Signed with `HS256` using `JWT_SECRET_KEY`
 - Payload: `{ user_id, role, exp, iat }`
-- Expires in **3 minutes**
+- Expires in **15 minutes**
 - Sent in the `Authorization: Bearer <token>` header on every request
 - Never stored in the database
 
 **Refresh token:**
 - Signed with `HS256` using the same key
 - Payload: `{ user_id, exp, iat }`
-- Expires in **5 minutes**
+- Expires in **20 minutes**
 - Stored in the `refresh_tokens` table with an `is_used` flag
 - One-time use — marked `is_used = True` immediately on use
 
@@ -205,7 +205,7 @@ The API uses two JWTs per session — a short-lived access token and a longer-li
 **Logout:**
 - Client sends `POST /auth/logout` with the refresh token
 - Server marks it `is_used = True`
-- The access token is stateless so it remains valid until it naturally expires (max 3 minutes)
+- The access token is stateless so it remains valid until it naturally expires (max 15 minutes)
 
 ---
 
@@ -459,13 +459,13 @@ Auth endpoints (`/auth/refresh`, `/auth/logout`, `/auth/me`) do **not** require 
 | `sessionStorage` | Slightly safer — tokens are cleared when the tab closes. |
 | Cookie (httpOnly) | Safest against XSS but requires server-side changes. Not currently supported. |
 
-Since tokens expire in 3 minutes, don't overthink this — `localStorage` is fine.
+Since tokens expire in 15 minutes, don't overthink this — `localStorage` is fine.
 
 ---
 
 ### Step 4 — Token Refresh Strategy
 
-Access tokens expire after **3 minutes**. When a request returns `401`, refresh the token and retry.
+Access tokens expire after **15 minutes**. When a request returns `401`, refresh the token and retry.
 
 ```js
 async function apiRequestWithRefresh(path, options = {}) {
@@ -512,7 +512,7 @@ function redirectToLogin() {
 }
 ```
 
-> **Note:** Refresh tokens also expire after 5 minutes and are single-use. Each `/auth/refresh` call returns a brand-new pair of tokens — always replace both.
+> **Note:** Refresh tokens also expire after 20 minutes and are single-use. Each `/auth/refresh` call returns a brand-new pair of tokens — always replace both.
 
 ---
 

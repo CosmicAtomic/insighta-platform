@@ -125,7 +125,7 @@ async def github_callback(request: Request, code: str = None, state: str = None,
                 token=token,
                 user_id=user.id,
                 is_used=False,
-                expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+                expires_at=datetime.now(timezone.utc) + timedelta(minutes=20),
                 created_at=datetime.now(timezone.utc)
             )
             db.add(db_token)
@@ -210,7 +210,7 @@ async def github_callback(request: Request, code: str = None, state: str = None,
         token=refresh_token,
         user_id=user.id,
         is_used=False,
-        expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+        expires_at=datetime.now(timezone.utc) + timedelta(minutes=20),
         created_at=datetime.now(timezone.utc)
     )
     db.add(db_token)
@@ -256,7 +256,7 @@ async def auth_refresh(request: Request, request_body: RefreshRequest = None, db
         token=new_refresh_token,
         user_id=user.id,
         is_used=False,
-        expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+        expires_at=datetime.now(timezone.utc) + timedelta(minutes=20),
         created_at=datetime.now(timezone.utc)
     )
     db.add(db_token)
