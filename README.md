@@ -336,8 +336,8 @@ The `/api/profiles/search?q=<query>` endpoint uses a **rule-based keyword scanne
 
 | Type | Keywords | Filter applied |
 |------|----------|----------------|
-| Gender | `male`, `males`, `men`, `man` | `gender = "male"` |
-| Gender | `female`, `females`, `women`, `woman` | `gender = "female"` |
+| Gender | `male`, `males`, `men`, `man`, `boy`, `boys` | `gender = "male"` |
+| Gender | `female`, `females`, `women`, `woman`, `girl`, `girls` | `gender = "female"` |
 | Age group | `child`, `children` | `age_group = "child"` |
 | Age group | `teen`, `teens`, `teenager`, `teenagers` | `age_group = "teenager"` |
 | Age group | `adult`, `adults` | `age_group = "adult"` |

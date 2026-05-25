@@ -17,8 +17,8 @@ def parse_query(query: str) -> dict:
     # --- Keyword definitions ---
 
     # Gender keywords
-    female_keywords = {"female", "females", "women", "woman"}
-    male_keywords = {"male", "males", "men", "man"}
+    female_keywords = {"female", "females", "women", "woman", "girl", "girls"}
+    male_keywords = {"male", "males", "men", "man", "boy", "boys"}
 
     # Age group keywords — each maps to a specific age_group value in the DB
     child_keywords = {"child", "children"}
