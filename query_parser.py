@@ -56,35 +56,26 @@ def parse_query(query: str) -> dict:
         filters["gender"] = "male"
 
     # --- Age group filter ---
-    # Only one age group can be set — first match wins
-    if has_child:
-        filters["age_group"] = "child"
-    elif has_teen:
-        filters["age_group"] = "teenager"
-    elif has_adult:
-        filters["age_group"] = "adult"
-    elif has_senior:
-        filters["age_group"] = "senior"
-
-    # --- "young" keyword ---
-    # "young" is NOT an age group in the DB — it maps to an age range instead
-    # Only apply if no age group was already found (e.g. "young adults" → adult wins)
-    if has_young and "age_group" not in filters:
-        filters["min_age"] = 16
-        filters["max_age"] = 24
+    # If multiple age group keywords appear (e.g. "senior adult"), the query is
+    # ambiguous — skip the filter rather than picking one arbitrarily
+    age_group_hits = sum([has_child, has_teen, has_adult, has_senior])
+    if age_group_hits == 1:
+        if has_child:
+            filters["age_group"] = "child"
+        elif has_teen:
+            filters["age_group"] = "teenager"
+        elif has_adult:
+            filters["age_group"] = "adult"
+        elif has_senior:
+            filters["age_group"] = "senior"
 
     # --- Age comparison: "older than 30", "above 25", "over 18" → min_age ---
-    # We check each pattern against the full query string (not word-by-word)
-    # because some patterns are multi-word like "older than"
     for pattern in older_patterns:
         if pattern in query:
-            # r'\s+(\d+)' means: one or more spaces, then capture a number
-            # e.g. "older than 30" → captures "30"
             match = re.search(pattern + r'\s+(\d+)', query)
             if match:
-                # match.group(1) returns the captured number as a string → convert to int
                 filters["min_age"] = int(match.group(1))
-                break  # stop once we've found and extracted a valid pattern
+                break
 
     # --- Age comparison: "younger than 20", "below 15", "under 30" → max_age ---
     for pattern in younger_patterns:
@@ -94,17 +85,31 @@ def parse_query(query: str) -> dict:
                 filters["max_age"] = int(match.group(1))
                 break
 
-    # --- Country filter: "from Nigeria" → country_id = "NG" ---
+    # --- "young" keyword ---
+    # Runs after age comparisons so explicit ranges take priority.
+    # Only applies if no age group and no explicit age range was extracted.
+    # "young adults" → adult wins; "young older than 30" → comparison wins
+    if has_young and "age_group" not in filters and "min_age" not in filters and "max_age" not in filters:
+        filters["min_age"] = 16
+        filters["max_age"] = 24
+
+    # --- Country filter: "from Nigeria" / "from United States" → country_id ---
+    # Try progressively shorter phrases after "from" (longest first) so that
+    # "from United States" matches before falling back to just "United"
     if "from" in words:
-        # Find the position of "from" in the word list, grab the next word
         idx = words.index("from")
-        if idx + 1 < len(words):
-            country_name = words[idx + 1]
-            # search_fuzzy handles slight misspellings e.g. "nigera" → Nigeria
-            country = pycountry.countries.search_fuzzy(country_name)
-            if country:
-                # alpha_2 is the 2-letter country code e.g. "NG", "KE", "AO"
-                filters["country_id"] = country[0].alpha_2
+        remaining = words[idx + 1:]
+        country_found = False
+        for length in range(min(len(remaining), 3), 0, -1):
+            candidate = " ".join(remaining[:length])
+            try:
+                results = pycountry.countries.search_fuzzy(candidate)
+                if results:
+                    filters["country_id"] = results[0].alpha_2
+                    country_found = True
+                    break
+            except LookupError:
+                continue
 
     # Return the filters dict if anything was found, otherwise None
     # None signals that the query couldn't be interpreted
