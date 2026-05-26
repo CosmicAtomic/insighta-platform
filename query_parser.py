@@ -98,15 +98,13 @@ def parse_query(query: str) -> dict:
     # "from United States" matches before falling back to just "United"
     if "from" in words:
         idx = words.index("from")
-        remaining = words[idx + 1:]
-        country_found = False
+        remaining = [w for w in words[idx + 1:] if w not in {"the", "a", "an"}]
         for length in range(min(len(remaining), 3), 0, -1):
             candidate = " ".join(remaining[:length])
             try:
                 results = pycountry.countries.search_fuzzy(candidate)
                 if results:
                     filters["country_id"] = results[0].alpha_2
-                    country_found = True
                     break
             except LookupError:
                 continue
