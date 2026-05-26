@@ -56,8 +56,7 @@ def parse_query(query: str) -> dict:
         filters["gender"] = "male"
 
     # --- Age group filter ---
-    # If multiple age group keywords appear (e.g. "senior adult"), the query is
-    # ambiguous — skip the filter rather than picking one arbitrarily
+    # Single match → exact filter. Multiple matches → OR across all matched groups.
     age_group_hits = sum([has_child, has_teen, has_adult, has_senior])
     if age_group_hits == 1:
         if has_child:
@@ -68,6 +67,17 @@ def parse_query(query: str) -> dict:
             filters["age_group"] = "adult"
         elif has_senior:
             filters["age_group"] = "senior"
+    elif age_group_hits > 1:
+        matched = []
+        if has_child:
+            matched.append("child")
+        if has_teen:
+            matched.append("teenager")
+        if has_adult:
+            matched.append("adult")
+        if has_senior:
+            matched.append("senior")
+        filters["age_group"] = matched
 
     # --- Age comparison: "older than 30", "above 25", "over 18" → min_age ---
     for pattern in older_patterns:

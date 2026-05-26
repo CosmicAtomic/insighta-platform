@@ -309,7 +309,11 @@ def search(
     if filter.get("gender"):
         query = query.filter(Profile.gender == filter["gender"])
     if filter.get("age_group"):
-        query = query.filter(Profile.age_group == filter["age_group"])
+        age_group = filter["age_group"]
+        if isinstance(age_group, list):
+            query = query.filter(Profile.age_group.in_(age_group))
+        else:
+            query = query.filter(Profile.age_group == age_group)
     if filter.get("min_age") is not None:
         query = query.filter(Profile.age >= filter["min_age"])
     if filter.get("max_age") is not None:
